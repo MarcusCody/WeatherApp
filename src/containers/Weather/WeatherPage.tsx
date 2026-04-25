@@ -1,79 +1,156 @@
 import * as React from "react";
-import { Alert, Box, Container, IconButton, Stack, Tooltip, Typography } from "@mui/material";
-import DarkModeRoundedIcon from "@mui/icons-material/DarkModeRounded";
-import LightModeRoundedIcon from "@mui/icons-material/LightModeRounded";
+import { Alert, Box, Container, Stack, Typography } from "@mui/material";
 
 import { SearchBar, SearchBarValue } from "@/components/SearchBar";
 import { WeatherCard } from "@/components/WeatherCard";
 import { SearchHistory, SearchHistoryItem } from "@/components/SearchHistory";
 import { GlassCard } from "@/components/GlassCard";
+import { ThemeToggleButton } from "@/components/ThemeToggleButton";
 import { ThemeMode } from "@/common/enums";
 import { useLocalStorageState } from "@/hooks/useLocalStorage";
 import {
   LocationSuggestion,
   OpenWeatherError,
+  WeatherResult,
   fetchCurrentWeatherByCoords,
   fetchCurrentWeatherByQuery,
   searchLocations
 } from "@/services/openWeather";
 import { newId } from "@/utils/id";
 
-function normalizeInput(s: string): string {
+const DEFAULT_QUERY = "Singapore";
+const HISTORY_STORAGE_KEY = "wwa.history";
+const HISTORY_MAX_ITEMS = 10;
+
+const SUGGEST_MIN_CHARS = 2;
+const SUGGEST_LIMIT = 6;
+const SUGGEST_DEBOUNCE_MS = 300;
+
+type DisplayInfo = { locationName: string; countryCode: string };
+
+type CoordsOptions = {
+  lat: number;
+  lon: number;
+  label?: string;
+  display?: DisplayInfo;
+};
+
+function normalizeQuery(s: string): string {
   return s.trim().replace(/\s+/g, " ");
 }
 
-function validateInput(v: SearchBarValue): string | null {
-  if (!normalizeInput(v.query)) return "Please enter a country (e.g. Singapore).";
+function validateQuery(q: string): string | null {
+  if (!q) return "Please enter a country (e.g. Singapore).";
   return null;
 }
 
-function parseLabelToDisplay(label: string): { locationName: string; countryCode: string } | null {
-  // Expected format from our suggestions: "City, State?, CC"
+function parseLabelToDisplay(label: string): DisplayInfo | undefined {
+  // Expected suggestion format: "City, State?, CC"
   const parts = label
     .split(",")
     .map((p) => p.trim())
     .filter(Boolean);
-  if (parts.length < 2) return null;
+  if (parts.length < 2) return undefined;
 
   const countryCode = parts[parts.length - 1];
   const locationName = parts.slice(0, -1).join(", ");
-  if (!countryCode || !locationName) return null;
+  if (!countryCode || !locationName) return undefined;
   return { locationName, countryCode };
+}
+
+function suggestionToCoords(s: LocationSuggestion): CoordsOptions {
+  return {
+    lat: s.lat,
+    lon: s.lon,
+    label: s.label,
+    display: {
+      locationName: [s.name, s.state].filter(Boolean).join(", "),
+      countryCode: s.country
+    }
+  };
+}
+
+function historyItemToCoords(it: SearchHistoryItem): CoordsOptions | undefined {
+  if (it.lat == null || it.lon == null) return undefined;
+  return {
+    lat: it.lat,
+    lon: it.lon,
+    label: it.query,
+    display: parseLabelToDisplay(it.query)
+  };
+}
+
+function isAbortError(e: unknown): boolean {
+  return (e as { name?: string })?.name === "AbortError";
+}
+
+function getErrorMessage(e: unknown): string {
+  const fallback = "Something went wrong. Please try again.";
+  if (e instanceof OpenWeatherError) return e.message;
+  if (e instanceof Error) return e.message || fallback;
+  return fallback;
+}
+
+function useDebouncedSuggestions(rawQuery: string) {
+  const [suggestions, setSuggestions] = React.useState<LocationSuggestion[]>([]);
+  const [isSuggesting, setIsSuggesting] = React.useState(false);
+
+  React.useEffect(() => {
+    const q = normalizeQuery(rawQuery);
+    if (q.length < SUGGEST_MIN_CHARS) {
+      setSuggestions([]);
+      setIsSuggesting(false);
+      return;
+    }
+
+    setIsSuggesting(true);
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        const res = await searchLocations({
+          query: q,
+          limit: SUGGEST_LIMIT,
+          signal: controller.signal
+        });
+        setSuggestions(res);
+      } catch (e) {
+        if (isAbortError(e)) return;
+        setSuggestions([]);
+      } finally {
+        setIsSuggesting(false);
+      }
+    }, SUGGEST_DEBOUNCE_MS);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [rawQuery]);
+
+  return { suggestions, isSuggesting };
 }
 
 export function WeatherPage(props: { mode: ThemeMode; onToggleMode: () => void }) {
   const { mode, onToggleMode } = props;
 
-  const [query, setQuery] = React.useState<SearchBarValue>({ query: "Singapore" });
-  const [weather, setWeather] = React.useState<null | Awaited<
-    ReturnType<typeof fetchCurrentWeatherByQuery>
-  >>(null);
+  const [query, setQuery] = React.useState<SearchBarValue>({ query: DEFAULT_QUERY });
+  const [weather, setWeather] = React.useState<WeatherResult | null>(null);
   const [isLoading, setIsLoading] = React.useState(false);
-  const [isSuggesting, setIsSuggesting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [history, setHistory] = useLocalStorageState<SearchHistoryItem[]>(
+    HISTORY_STORAGE_KEY,
+    []
+  );
 
-  const [history, setHistory] = useLocalStorageState<SearchHistoryItem[]>("wwa.history", []);
   const inFlight = React.useRef<AbortController | null>(null);
-  const suggestFlight = React.useRef<AbortController | null>(null);
-  const [suggestions, setSuggestions] = React.useState<LocationSuggestion[]>([]);
+  const { suggestions, isSuggesting } = useDebouncedSuggestions(query.query);
 
   const runSearch = React.useCallback(
-    async (
-      next: SearchBarValue,
-      opts?: {
-        addToHistory?: boolean;
-        coords?: {
-          lat: number;
-          lon: number;
-          label?: string;
-          display?: { locationName: string; countryCode: string };
-        };
-      }
-    ) => {
-      const q = normalizeInput(next.query);
-      const validation = validateInput({ query: q });
-      if (validation) {
-        setError(validation);
+    async (rawQuery: string, opts?: { addToHistory?: boolean; coords?: CoordsOptions }) => {
+      const q = normalizeQuery(rawQuery);
+      const validationError = validateQuery(q);
+      if (validationError) {
+        setError(validationError);
         return;
       }
 
@@ -84,7 +161,7 @@ export function WeatherPage(props: { mode: ThemeMode; onToggleMode: () => void }
       inFlight.current = controller;
 
       try {
-        const res = opts?.coords
+        const result = opts?.coords
           ? await fetchCurrentWeatherByCoords({
               lat: opts.coords.lat,
               lon: opts.coords.lon,
@@ -92,7 +169,7 @@ export function WeatherPage(props: { mode: ThemeMode; onToggleMode: () => void }
               signal: controller.signal
             })
           : await fetchCurrentWeatherByQuery({ query: q, signal: controller.signal });
-        setWeather(res);
+        setWeather(result);
 
         if (opts?.addToHistory !== false) {
           const record: SearchHistoryItem = {
@@ -102,21 +179,14 @@ export function WeatherPage(props: { mode: ThemeMode; onToggleMode: () => void }
             lat: opts?.coords?.lat,
             lon: opts?.coords?.lon
           };
-
           setHistory((prev) => {
-            const filtered = prev.filter((p) => !(p.query.toLowerCase() === q.toLowerCase()));
-            return [record, ...filtered].slice(0, 10);
+            const filtered = prev.filter((p) => p.query.toLowerCase() !== q.toLowerCase());
+            return [record, ...filtered].slice(0, HISTORY_MAX_ITEMS);
           });
         }
       } catch (e) {
-        if ((e as { name?: string }).name === "AbortError") return;
-        if (e instanceof OpenWeatherError) {
-          setError(e.message);
-        } else if (e instanceof Error) {
-          setError(e.message || "Something went wrong. Please try again.");
-        } else {
-          setError("Something went wrong. Please try again.");
-        }
+        if (isAbortError(e)) return;
+        setError(getErrorMessage(e));
       } finally {
         setIsLoading(false);
       }
@@ -125,41 +195,25 @@ export function WeatherPage(props: { mode: ThemeMode; onToggleMode: () => void }
   );
 
   React.useEffect(() => {
-    void runSearch(query, { addToHistory: false });
+    void runSearch(DEFAULT_QUERY, { addToHistory: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  React.useEffect(() => {
-    const q = normalizeInput(query.query);
-    if (q.length < 2) {
-      setSuggestions([]);
-      setIsSuggesting(false);
-      suggestFlight.current?.abort();
-      return;
-    }
+  const handleSubmit = () => void runSearch(query.query);
 
-    setIsSuggesting(true);
-    suggestFlight.current?.abort();
-    const controller = new AbortController();
-    suggestFlight.current = controller;
+  const handleSelectSuggestion = (s: LocationSuggestion) => {
+    setQuery({ query: s.label });
+    void runSearch(s.label, { coords: suggestionToCoords(s) });
+  };
 
-    const t = window.setTimeout(async () => {
-      try {
-        const res = await searchLocations({ query: q, limit: 6, signal: controller.signal });
-        setSuggestions(res);
-      } catch (e) {
-        if ((e as { name?: string }).name === "AbortError") return;
-        setSuggestions([]);
-      } finally {
-        setIsSuggesting(false);
-      }
-    }, 300);
+  const handleHistorySearch = (it: SearchHistoryItem) => {
+    setQuery({ query: it.query });
+    void runSearch(it.query, { coords: historyItemToCoords(it) });
+  };
 
-    return () => {
-      window.clearTimeout(t);
-      controller.abort();
-    };
-  }, [query.query]);
+  const handleHistoryDelete = (id: string) => {
+    setHistory((prev) => prev.filter((x) => x.id !== id));
+  };
 
   return (
     <Container maxWidth="lg" sx={{ py: { xs: 2, md: 5 } }}>
@@ -170,44 +224,14 @@ export function WeatherPage(props: { mode: ThemeMode; onToggleMode: () => void }
               <SearchBar
                 value={query}
                 onChange={setQuery}
-                onSubmit={() => void runSearch(query)}
+                onSubmit={handleSubmit}
                 suggestions={suggestions}
                 isSuggesting={isSuggesting}
-                onSelectSuggestion={(s) => {
-                  setQuery({ query: s.label });
-                  void runSearch(
-                    { query: s.label },
-                    {
-                      coords: {
-                        lat: s.lat,
-                        lon: s.lon,
-                        label: s.label,
-                        display: {
-                          locationName: [s.name, s.state].filter(Boolean).join(", "),
-                          countryCode: s.country
-                        }
-                      }
-                    }
-                  );
-                }}
+                onSelectSuggestion={handleSelectSuggestion}
                 isLoading={isLoading}
               />
             </Box>
-            <Tooltip title={mode === ThemeMode.Light ? "Switch to dark" : "Switch to light"}>
-              <IconButton
-                aria-label="Toggle theme"
-                onClick={onToggleMode}
-                sx={{
-                  width: 60,
-                  height: 60,
-                  borderRadius: (theme) => theme.radius.md,
-                  bgcolor: "rgba(255,255,255,0.22)",
-                  border: "1px solid rgba(255,255,255,0.22)"
-                }}
-              >
-                {mode === ThemeMode.Light ? <DarkModeRoundedIcon /> : <LightModeRoundedIcon />}
-              </IconButton>
-            </Tooltip>
+            <ThemeToggleButton mode={mode} onToggle={onToggleMode} />
           </Stack>
 
           {error ? (
@@ -220,7 +244,7 @@ export function WeatherPage(props: { mode: ThemeMode; onToggleMode: () => void }
             </Alert>
           ) : null}
 
-          {/* Single outer container wrapping Today's Weather + Search History (matches Figma) */}
+          {/* Outer container wraps Today's Weather + Search History (matches Figma) */}
           <GlassCard
             sx={{
               borderRadius: (theme) => theme.radius.xl,
@@ -228,12 +252,10 @@ export function WeatherPage(props: { mode: ThemeMode; onToggleMode: () => void }
               p: { xs: 3, md: 6 }
             }}
           >
-            {/* Weather section */}
             <Box sx={{ pb: { xs: "18px", md: "22px" } }}>
               <WeatherCard weather={weather} isLoading={isLoading} wrap={false} />
             </Box>
 
-            {/* Inner background container for history (matches Figma) */}
             <Box
               sx={{
                 borderRadius: (theme) => theme.radius.lg,
@@ -246,24 +268,8 @@ export function WeatherPage(props: { mode: ThemeMode; onToggleMode: () => void }
               <SearchHistory
                 wrap={false}
                 items={history}
-                onSearch={(it) => {
-                  const next = { query: it.query };
-                  setQuery(next);
-                  void runSearch(
-                    next,
-                    it.lat != null && it.lon != null
-                      ? {
-                          coords: {
-                            lat: it.lat,
-                            lon: it.lon,
-                            label: it.query,
-                            display: parseLabelToDisplay(it.query) ?? undefined
-                          }
-                        }
-                      : undefined
-                  );
-                }}
-                onDelete={(id) => setHistory((prev) => prev.filter((x) => x.id !== id))}
+                onSearch={handleHistorySearch}
+                onDelete={handleHistoryDelete}
               />
             </Box>
           </GlassCard>
