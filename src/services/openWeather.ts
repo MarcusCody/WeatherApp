@@ -29,6 +29,7 @@ export type OpenWeatherGeocodeDirectItem = {
 };
 
 export type LocationSuggestion = OpenWeatherGeocodeDirectItem & {
+  id: string;
   label: string;
 };
 
@@ -166,6 +167,12 @@ export function formatLocationLabel(it: OpenWeatherGeocodeDirectItem): string {
   return [it.name, it.state, it.country].filter(Boolean).join(", ");
 }
 
+function getLocationSuggestionId(it: OpenWeatherGeocodeDirectItem): string {
+  return [it.name, it.state ?? "", it.country, it.lat, it.lon]
+    .join("|")
+    .toLowerCase();
+}
+
 function dedupeLocationSuggestions(items: LocationSuggestion[]): LocationSuggestion[] {
   const seen = new Set<string>();
   return items.filter((it) => {
@@ -207,7 +214,13 @@ export async function searchLocations(params: {
   }
 
   const items = (await r.json()) as OpenWeatherGeocodeDirectItem[];
-  return dedupeLocationSuggestions(items.map((it) => ({ ...it, label: formatLocationLabel(it) })));
+  return dedupeLocationSuggestions(
+    items.map((it) => ({
+      ...it,
+      id: getLocationSuggestionId(it),
+      label: formatLocationLabel(it)
+    }))
+  );
 }
 
 export async function fetchCurrentWeatherByCoords(params: {
