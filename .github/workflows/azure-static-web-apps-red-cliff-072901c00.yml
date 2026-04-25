@@ -45,6 +45,11 @@ jobs:
           output_location: "build" # Built app content directory - optional
           github_id_token: ${{ steps.idtoken.outputs.result }}
           ###### End of Repository/Build Configurations ######
+        env:
+          # Build-time env var for webpack/dotenv-webpack.
+          # Create in GitHub: Repo → Settings → Secrets and variables → Actions → New repository secret.
+          # NOTE: This is a client-side static app; any key bundled into JS is publicly visible. since there is no server-side component, we need to pass the key at build time.
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
 
   close_pull_request_job:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
