@@ -1,0 +1,14 @@
+:root {
+  --bg1: #b69cff;
+  --bg2: #7b5cff;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+}
+
