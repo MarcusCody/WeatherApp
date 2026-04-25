@@ -64,6 +64,9 @@ export function SearchBar(props: {
         }}
         filterOptions={(x) => x} // server-side filtering
         getOptionLabel={(opt) => (typeof opt === "string" ? opt : opt.label)}
+        getOptionKey={(opt) =>
+          typeof opt === "string" ? opt : `${opt.label}-${opt.lat}-${opt.lon}`
+        }
         onChange={(_, next) => {
           if (typeof next === "string" || !next) return;
           onSelectSuggestion?.(next);
