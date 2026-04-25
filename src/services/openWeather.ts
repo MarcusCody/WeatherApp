@@ -166,6 +166,16 @@ export function formatLocationLabel(it: OpenWeatherGeocodeDirectItem): string {
   return [it.name, it.state, it.country].filter(Boolean).join(", ");
 }
 
+function dedupeLocationSuggestions(items: LocationSuggestion[]): LocationSuggestion[] {
+  const seen = new Set<string>();
+  return items.filter((it) => {
+    const key = it.label.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export async function searchLocations(params: {
   query: string;
   limit?: number;
@@ -197,7 +207,7 @@ export async function searchLocations(params: {
   }
 
   const items = (await r.json()) as OpenWeatherGeocodeDirectItem[];
-  return items.map((it) => ({ ...it, label: formatLocationLabel(it) }));
+  return dedupeLocationSuggestions(items.map((it) => ({ ...it, label: formatLocationLabel(it) })));
 }
 
 export async function fetchCurrentWeatherByCoords(params: {
