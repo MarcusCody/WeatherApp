@@ -84,48 +84,6 @@ function toResult(
   };
 }
 
-export async function fetchCurrentWeather(params: {
-  city: string;
-  country: string;
-  signal?: AbortSignal;
-}): Promise<WeatherResult> {
-  const { city, country, signal } = params;
-
-  const apiKey = getOpenWeatherApiKey();
-  const trimmedQuery = `${city},${country}`.trim();
-  const requestUrl = new URL(OPENWEATHER_CURRENT_WEATHER_URL);
-  requestUrl.searchParams.set("q", trimmedQuery);
-  requestUrl.searchParams.set("appid", apiKey);
-  requestUrl.searchParams.set("units", "metric");
-
-  const response = await fetch(requestUrl.toString(), { method: "GET", signal });
-  if (!response.ok) {
-    let message = "Unable to fetch weather. Please try again.";
-    try {
-      const errorBody = (await response.json()) as { message?: string };
-      if (errorBody?.message) message = errorBody.message;
-    } catch {
-      // ignore
-    }
-
-    if (response.status === HttpStatus.NotFound) {
-      message = "City / country not found. Please check your input and try again.";
-    }
-    if (response.status === HttpStatus.Unauthorized) {
-      message =
-        "Invalid API key (401). Double-check OPENWEATHER_API_KEY in your .env (no quotes/spaces), and ensure the key is active in your OpenWeather dashboard. New keys can take a little time to activate.";
-    }
-    if (response.status === HttpStatus.TooManyRequests) {
-      message =
-        "Rate limit exceeded (429). Please wait a bit and try again (or use a different API key/plan).";
-    }
-    throw new OpenWeatherError(message, response.status);
-  }
-
-  const weatherResponse = (await response.json()) as OpenWeatherCurrentResponse;
-  return toResult(weatherResponse);
-}
-
 async function fetchGeocodeTopResult(params: {
   query: string;
   signal?: AbortSignal;
