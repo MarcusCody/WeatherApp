@@ -105,6 +105,7 @@ export function useWeatherSearch() {
 
       setError(null);
       setIsLoading(true);
+      // Abort the previous search if it's still in flight.
       inFlight.current?.abort();
       const controller = new AbortController();
       inFlight.current = controller;

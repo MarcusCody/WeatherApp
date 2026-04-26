@@ -75,21 +75,24 @@ export function WeatherPage(props: { mode: ThemeMode; onToggleMode: () => void }
     useWeatherSearch();
   const { suggestions, isSuggesting } = useDebouncedSuggestions(query.query);
 
+  // Run a search for the default query when the component mounts.
   React.useEffect(() => {
     void runSearch(DEFAULT_QUERY, { addToHistory: false });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Handle the submission of the search query.
   const handleSubmit = () => void runSearch(query.query);
 
-  const handleSelectSuggestion = (s: LocationSuggestion) => {
-    setQuery({ query: s.label });
-    void runSearch(s.label, { coords: suggestionToCoords(s) });
+  // Handle the selection of a location suggestion from the autocomplete list.
+  const handleSelectSuggestion = (locationSuggestion: LocationSuggestion) => {
+    setQuery({ query: locationSuggestion.label });
+    void runSearch(locationSuggestion.label, { coords: suggestionToCoords(locationSuggestion) });
   };
 
-  const handleHistorySearch = (it: SearchHistoryItem) => {
-    setQuery({ query: it.query });
-    void runSearch(it.query, { coords: historyItemToCoords(it) });
+  // Handle the selection of a search history item from the history list.
+  const handleHistorySearch = (searchHistoryItem: SearchHistoryItem) => {
+    setQuery({ query: searchHistoryItem.query });
+    void runSearch(searchHistoryItem.query, { coords: historyItemToCoords(searchHistoryItem) });
   };
 
   return (
